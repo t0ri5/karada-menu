@@ -43,7 +43,7 @@ def safe_url(url: str) -> bool:
         return False
     return (u.path == '/api/shopDetailNewXML/891148/'
             or re.fullmatch(r'/c/\d{4}/\d{2}/\d{2}/\d+/index/contents\.xml', u.path) is not None
-            or (u.path == '/oi.php' and re.fullmatch(r'/c/\d{4}/\d{2}/\d{2}/\d+/index/orig/[12]\.jpg', u.query) is not None))
+            or (u.path == '/oi.php' and re.fullmatch(r'/c/\d{4}/\d{2}/\d{2}/\d+/index/orig/[01]\.jpg', u.query) is not None))
 
 
 def get_bytes(url, fetch) -> bytes:
@@ -103,7 +103,7 @@ def discover_images(flyer, html, today, fetch) -> list[str]:
             count = min(int(config.findtext('./configration/totalPages', '0')), MAX_PAGES)
             path = urlparse(contents).path.removesuffix('index/contents.xml')
             urls = ['https://www.shufoo.net/oi.php?' + path + f'index/orig/{n}.jpg'
-                    for n in range(1, count + 1)]
+                    for n in range(count)]
             return [url for url in urls if safe_url(url)]
     return []
 

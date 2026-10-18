@@ -106,6 +106,19 @@ class OcrTests(unittest.TestCase):
         with patch('scripts.flyer_ocr.get_bytes',return_value=xml):
             self.assertEqual(discover_images(flyer,html,TODAY,None),[])
 
+    def test_shufoo_original_pages_start_at_zero(self):
+        flyer = dict(FLYER,store='olympic',source='Shufoo!')
+        html='<li class="shop_chirashi_list_item_now"><span data-content_id="123"></span></li>'
+        shop=b'''<shop><shopId>891148</shopId><chirashis><chirashi><contentId>123</contentId>
+        <publishStartTime>2026/10/14 00:00:00</publishStartTime><publishEndTime>2026/10/19 20:59:59</publishEndTime>
+        <contentsXml>https://www.shufoo.net/c/2026/10/09/88289853300247/index/contents.xml</contentsXml>
+        </chirashi></chirashis></shop>'''
+        config=b'<libook><configration><totalPages>2</totalPages></configration></libook>'
+        with patch('scripts.flyer_ocr.get_bytes',side_effect=[shop,config]):
+            urls=discover_images(flyer,html,TODAY,None)
+        self.assertEqual([url.rsplit('/',1)[1] for url in urls],['0.jpg','1.jpg'])
+        self.assertTrue(all(safe_url(url) for url in urls))
+
     def test_run_keeps_candidates_out_of_verified_deals(self):
         candidate = candidates_from_rows(ROWS,1000,1000,FLYER,IMAGE,TODAY,('ねぎ',),())[0]
         class Response:

@@ -30,4 +30,5 @@ assert.equal(run('ocrCandidates().length'),0,'Stale OCR data must be hidden');
 assert.equal(run("confirmOcrCandidate('candidate-1',{item:'長ねぎ',price:171.72,qty:'2本',confirmed:true})"),false);
 assert.equal(run("safeOcrImageUrl('javascript:alert(1)')"),'');
 assert.equal(run("safeOcrImageUrl('https://attacker.test/image.jpg')"),'');
+assert.match(run("safeOcrImageUrl('https://www.shufoo.net/oi.php?/c/2026/10/09/88289853300247/index/orig/0.jpg')"),/0\.jpg$/);
 console.log('OCR review UI checks passed');
