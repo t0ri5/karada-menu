@@ -106,23 +106,24 @@ jobs:
           DEPLOY_URL: ${{ steps.deployment.outputs.page_url }}
           BUILD_RUN_ID: ${{ github.run_id }}
           BUILD_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
         run: |
-          python - <<'PYVERIFY'
-          import json, os, time
-          from urllib.request import Request, urlopen
-          from urllib.error import HTTPError, URLError
-
-          build_id = os.environ['BUILD_RUN_ID'] + '-' + os.environ['BUILD_RUN_ATTEMPT']
-          url = (os.environ['DEPLOY_URL'].rstrip('/') +
-                 '/data/runs/' + build_id + '.json')
-          print('Verifying published version:', url, flush=True)
-          ok = False
-          # Allow a short propagation delay for GitHub Pages' CDN.
-          for attempt in range(15):
-              try:
-                  req = Request(url, headers={'Cache-Control': 'no-cache'})
-                  with urlopen(req, timeout=12) as response:
-                      payload = json.load(response)
-                  if payload.get('build_id') == build_id:
-                      print('PUBLISHED_BUILD_ID:', payload['build_id'])
-                      print('PUBLISHED_OFFER_COUNT:', len(payload.get('deals', [])))
+          set -euo pipefail
+          build_id="${BUILD_RUN_ID}-${BUILD_RUN_ATTEMPT}"
+          url="${DEPLOY_URL%/}/data/runs/${build_id}.json"
+          echo "VERIFY_URL: $url"
+          max_attempts="${VERIFY_MAX_ATTEMPTS:-15}"
+          wait_seconds="${VERIFY_RETRY_SECONDS:-10}"
+          for ((attempt=1; attempt<=max_attempts; attempt++)); do
+            echo "VERIFY_ATTEMPT: $attempt"
+            if curl --fail --silent --show-error --location --max-time 15 \
+              -H 'Cache-Control: no-cache' "$url" -o /tmp/karada_published.json; then
+              if python -c 'import json, os, sys; data=json.load(open("/tmp/karada_published.json", encoding="utf-8")); expected=os.environ["BUILD_RUN_ID"]+"-"+os.environ["BUILD_RUN_ATTEMPT"]; count=len(data.get("deals", [])); print("PUBLISHED_BUILD_ID:", data.get("build_id")); print("PUBLISHED_OFFER_COUNT:", count); print("::warning::No verified sale items were published" if count == 0 else "OFFER_DATA_PRESENT"); sys.exit(0 if data.get("build_id")==expected else 1)'; then
+                echo 'DEPLOY_VERIFY_OK'
+                exit 0
+              fi
+            fi
+            if [ "$attempt" -lt "$max_attempts" ]; then sleep "$wait_seconds"; fi
+          done
+          echo '::error::Published build ID did not match, or JSON was unavailable.'
+          exit 1
