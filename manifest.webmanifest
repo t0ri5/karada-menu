@@ -1,0 +1,32 @@
+{
+  "name": "からだ想い献立 - 町屋の健康ごはん",
+  "short_name": "からだ献立",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f5f8f4",
+  "theme_color": "#206c62",
+  "lang": "ja",
+  "description": "30日分の健康献立・レシピ・買い物リスト・近隣スーパーのチラシ確認",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

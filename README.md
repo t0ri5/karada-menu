@@ -1,1 +1,25 @@
-# karada-menu
+# からだ想い献立 v3 — 毎朝更新付き PWA
+
+## 概要
+- 30日分の献立と材料（2人分）を表示。肉・肉エキス・シイタケ不使用。魚介は使用。
+- GitHub Actions が毎日 **08:00 JST ごろ** に公開店舗ページを確認し `data/latest.json` を生成して GitHub Pages に公開。
+- Android PWA は起動時・再表示時に `latest.json` を取得し、**本日分の確認できた食材だけ** をもとに夕食候補を切替。
+- 3店舗で公開ページの構造が異なります。取得できなかった店舗は `unavailable` / `no_extractable_offers` と表示。**3店舗の毎日すべての商品取得や最安値保証ではありません。**
+- 現状の候補の選び方は「レシピに一致する特売食材の種類が多いもの」を優先（同じ品の容量違い価格を比較した真の最安判定ではない）。
+
+## Android 公開手順（GitHub アカウントが必要）
+1. GitHub (https://github.com/) にログインし、**New repository** から新しい **Public** リポジトリ `karada-menu` を作成。
+2. この ZIP を解凍し、**フォルダの中のファイル一式（隠しフォルダ `.github` も含む）** をリポジトリのルートにアップロードして Commit。GitHub のWeb画面からは `Add file` → `Upload files` で可能。`.github/workflows/daily.yml` が確実に存在することを確認。
+3. `Settings` → `Pages` → `Build and deployment` の `Source` を **GitHub Actions** に変更。
+4. `Actions` → `Daily supermarket flyer update and app deployment` → `Run workflow` を実行。初回のみ数分で自動公開されることがあります。詳細はActionsログ。
+5. `Settings` → `Pages` に表示される HTTPS URL（例：`https://USER.github.io/karada-menu/`）をAndroidのChromeで開く。
+6. Chromeメニューの「アプリをインストール」または「ホーム画面に追加」を選択する。
+7. 毎朝の処理は `.github/workflows/daily.yml` の cron により実行（GitHub側の都合で遅延・停止する場合あり）。
+
+## 重要な制限
+- 公開ページの取得方法はベストエフォート。サイト変更・robotsポリシー・アクセス制限・掲載日表記の変更があれば取得できなくなります。必要に応じて提携APIや店舗が許可したフィードに置換してください。
+- チラシ画像の画像認識はありません。テキストで公開された「今日の掲載」情報だけを検出します。
+- 特売が見つからないときは通常献立を表示。**値段を捏造しません**。
+- 端末ローカルの手入力メモは同期されません。毎日の更新処理は端末のバックグラウンドではなくGitHubで実行します。
+- GitHub Pagesは公開サイトです。公開リポジトリに住所・病歴・個人情報を追加しないでください。このアプリにはユーザー入力の個人情報はアップロードされません。
+- アプリは医療用栄養計算ソフトではありません。服薬や腎疾患がある場合などは医療者に相談してください。
