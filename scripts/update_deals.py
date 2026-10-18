@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 
-SCRIPT_VERSION = "v6.1-full-file-verified-20261018"
+SCRIPT_VERSION = "v6.2-official-flyer-dates-20261018"
 ROOT = Path(__file__).resolve().parents[1]
 TODAY = datetime.now(ZoneInfo("Asia/Tokyo")).date()
 STORES = {
@@ -35,6 +35,7 @@ FLYER_SOURCES = {
         ("チラシガイド", "https://chirashi-guide.com/東京都/荒川区/222269/", "guide"),
     ],
     "iida": [
+        ("公式サイト", "https://www.comodi-iida.co.jp/store/tokyo/t006.html", "iida_official"),
         ("チラシガイド", "https://chirashi-guide.com/東京都/荒川区/2444/", "guide"),
     ],
 }
@@ -50,8 +51,8 @@ EXCLUDE = ("牛肉", "豚肉", "鶏肉", "ベーコン", "ハム", "ウインナ
 RE_QTY = re.compile(r"(?:\d+(?:\.\d+)?\s*(?:g|kg|ml|L|個|切れ|尾|パック|束|袋|本|株|丁)|100gあたり|各\d+\S{0,7})")
 PRICE_PAIR = re.compile(r"(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*\(税込\)")
 DATE_RANGE = re.compile(
-    r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日\s*[?～~\-??]\s*"
-    r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日"
+    r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日\s*[〜～~\-–—]\s*"
+    r"(?:(20\d\d)年\s*)?(?:(\d{1,2})月\s*)?(\d{1,2})日"
 )
 UA = {"User-Agent": "Mozilla/5.0 (compatible; KaradaMenu/1.1; personal flyer checker)"}
 
@@ -97,7 +98,12 @@ def parsed_ranges(text: str) -> list[tuple[date, date]]:
     for match in DATE_RANGE.finditer(text):
         try:
             start = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
-            end = date(int(match.group(4)), int(match.group(5)), int(match.group(6)))
+            end_year = int(match.group(4)) if match.group(4) else start.year
+            end_month = int(match.group(5)) if match.group(5) else start.month
+            # A December issue may end in January with the year omitted.
+            if not match.group(4) and end_month < start.month:
+                end_year += 1
+            end = date(end_year, end_month, int(match.group(6)))
         except ValueError:
             continue
         if start <= end and (end - start).days <= 90:
@@ -114,15 +120,23 @@ def flyer_from_html(html: str, store: str, url: str, provider: str,
     text = soup.get_text(" ", strip=True)
     compact = re.sub(r"\s+", "", text)
     expected = "オリンピック荒川一丁目店" if store == "olympic" else "コモディイイダ町屋店"
-    if expected not in compact:
+    identity_verified = expected in compact
+    if kind == "iida_official":
+        title = soup.title.get_text(strip=True) if soup.title else ""
+        identity_verified = (store == "iida" and "町屋店" in title
+                             and "コモディイイダ" in title
+                             and "東京都荒川区町屋3-18-11" in compact)
+    if not identity_verified:
         return {"store": store, "source": provider, "url": url, "status": "store_unverified", "period": ""}
 
-    # Do not let archived flyer dates be interpreted as a new publication.
+    # Scope dates to actual flyer blocks: weekly page headings, nearby stores,
+    # and archived issues must never validate a different flyer.
+    selectors = {"guide": ".flyer_title", "shufoo": ".chirashi_info_public_date",
+                 "iida_official": ".flyer-period"}
     if kind == "guide":
-        text = text.split("最近掲載していたチラシ")[0]
-    elif kind == "shufoo":
-        # Shufoo! lists current issue dates in the main flyer block.
-        text = text.split("店舗詳細")[0]
+        soup = BeautifulSoup(html.split("最近掲載していたチラシ")[0], "html.parser")
+    text = " ".join(node.get_text(" ", strip=True)
+                    for node in soup.select(selectors[kind]))
     ranges = parsed_ranges(text)
     valid = [(start, end) for start, end in ranges if start <= today <= end]
     if valid:
@@ -135,7 +149,7 @@ def flyer_from_html(html: str, store: str, url: str, provider: str,
         return {"store": store, "source": provider, "url": url, "status": "date_unverified", "period": ""}
     return {
         "store": store, "source": provider, "url": url,
-        "status": status, "period": f"{start.isoformat()}?{end.isoformat()}",
+        "status": status, "period": f"{start.isoformat()}〜{end.isoformat()}",
     }
 
 
@@ -187,7 +201,11 @@ def run(fetch=requests.get, today: date | None = None) -> dict:
             state["message"] = str(error)[:130]
         data["stores"].append(state)
         if store in FLYER_SOURCES:
-            data["flyers"].append(inspect_flyer(store, fetch, current))
+            flyer = inspect_flyer(store, fetch, current)
+            # Image publication dates are checked; image item/price OCR is not
+            # implemented. Keep this separate from the Tokubai fetch result.
+            flyer["item_extraction_status"] = "unsupported_image_extraction"
+            data["flyers"].append(flyer)
         time.sleep(0.15)
 
     output = ROOT / "data" / "latest.json"
