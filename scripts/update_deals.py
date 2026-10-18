@@ -1,3 +1,35 @@
+"""Daily store data updater for Karada Menu.
+
+Text-based, explicitly priced, dated items are treated as usable offers.
+Image-based flyers are made *viewable*, with their publication period checked
+separately. A flyer title/period is NEVER counted as a priced sale item.
+
+All sources are best effort and are subject to source-side permissions/markup.
+"""
+from __future__ import annotations
+
+import json
+import re
+import time
+from datetime import date, datetime
+from pathlib import Path
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
+
+import requests
+from bs4 import BeautifulSoup
+
+SCRIPT_VERSION = "v6.1-full-file-verified-20261018"
+ROOT = Path(__file__).resolve().parents[1]
+TODAY = datetime.now(ZoneInfo("Asia/Tokyo")).date()
+STORES = {
+    "olympic": ("オリンピック 荒川一丁目店", "https://tokubai.co.jp/" + quote("オリンピック") + "/279440"),
+    "iida": ("コモディイイダ 町屋店", "https://tokubai.co.jp/" + quote("コモディイイダ") + "/7543"),
+    "tairaya": ("TAIRAYA 町屋店", "https://tokubai.co.jp/TAIRAYA/260526"),
+}
+# Links open the publishers' websites instead of copying their flyer images.
+# The listing may be useful even when the site prevents machine reading.
+FLYER_SOURCES = {
     "olympic": [
         ("Shufoo!", "https://www.shufoo.net/pntweb/shopDetail/891148/", "shufoo"),
         ("チラシガイド", "https://chirashi-guide.com/東京都/荒川区/222269/", "guide"),
@@ -18,7 +50,7 @@ EXCLUDE = ("牛肉", "豚肉", "鶏肉", "ベーコン", "ハム", "ウインナ
 RE_QTY = re.compile(r"(?:\d+(?:\.\d+)?\s*(?:g|kg|ml|L|個|切れ|尾|パック|束|袋|本|株|丁)|100gあたり|各\d+\S{0,7})")
 PRICE_PAIR = re.compile(r"(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*\(税込\)")
 DATE_RANGE = re.compile(
-    r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日\s*[〜～~\-–—]\s*"
+    r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日\s*[?～~\-??]\s*"
     r"(20\d\d)年\s*(\d{1,2})月\s*(\d{1,2})日"
 )
 UA = {"User-Agent": "Mozilla/5.0 (compatible; KaradaMenu/1.1; personal flyer checker)"}
@@ -103,7 +135,7 @@ def flyer_from_html(html: str, store: str, url: str, provider: str,
         return {"store": store, "source": provider, "url": url, "status": "date_unverified", "period": ""}
     return {
         "store": store, "source": provider, "url": url,
-        "status": status, "period": f"{start.isoformat()}〜{end.isoformat()}",
+        "status": status, "period": f"{start.isoformat()}?{end.isoformat()}",
     }
 
 
