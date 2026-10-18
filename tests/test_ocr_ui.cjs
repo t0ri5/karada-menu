@@ -16,6 +16,13 @@ vm.runInContext(`
   remoteFeed={updated_at:isoToday(),deals:[],ocr_candidates:[testCandidate]};
 `,context);
 const run=code=>vm.runInContext(code,context);
+const initialStoreHtml=run('stores()');
+assert.ok(initialStoreHtml.indexOf('長ねぎ2本') < initialStoreHtml.indexOf('class="card store"'),
+  'Image products must be visible above the long store information cards');
+for(const page of ['today','calendar','stores','shopping','settings']){
+  const text=run(`${page}()`).replace(/<[^>]+>/g,'');
+  assert.equal(text.includes('?'),false,`${page} must not display corrupt question-mark symbols`);
+}
 assert.equal(run('activeDeals().length'),0,'Unconfirmed OCR must not affect meals');
 assert.equal(run("confirmOcrCandidate('candidate-1',{item:'長ねぎ',price:171.72,qty:'2本',confirmed:false})"),false);
 assert.equal(run('deals.length'),0);
@@ -25,6 +32,9 @@ assert.equal(run('deals[0].price'),171.72);
 assert.equal(run('deals[0].until===isoToday()'),true);
 assert.equal(run('ocrCandidates().length'),0,'Confirmed candidates must not be added twice');
 assert.equal(run('activeDeals().length'),1);
+const confirmedStoreHtml=run('stores()');
+assert.ok(confirmedStoreHtml.indexOf('長ねぎ 171.72円') < confirmedStoreHtml.indexOf('class="card store"'),
+  'A confirmed image product must remain visible in the upper offer list');
 run("remoteFeed.updated_at='2000-01-01';deals=[]");
 assert.equal(run('ocrCandidates().length'),0,'Stale OCR data must be hidden');
 assert.equal(run("confirmOcrCandidate('candidate-1',{item:'長ねぎ',price:171.72,qty:'2本',confirmed:true})"),false);
