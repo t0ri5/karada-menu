@@ -22,33 +22,39 @@ RE_PRICE=re.compile(r'(\d{1,3}(?:,\d{3})*|\d{1,5})円')
 RE_QTY=re.compile(r'(?:\d+(?:\.\d+)?\s*(?:g|kg|ml|L|個|切れ|尾|パック|束|袋|本|株|丁)|100gあたり|各\d+\S{0,7})')
 
 def extract(text,store,url):
-    # Only products in "today's listings". No undated or stale flyer interpretations.
+    """Parse adjacent product/price text, including newline-separated tokubai listings.
+
+    Prices on tokubai are commonly displayed as 199円215円(税込), i.e.
+    pre-tax then tax-inclusive. We report the tax-inclusive value.
+    """
     start=text.find('今日の掲載')
-    if start<0: return []
+    if start<0:return []
     body=text[start+len('今日の掲載'):]
     stop=len(body)
     for marker in ('注目のお知らせ','お店からのお知らせ','店舗情報詳細'):
         j=body.find(marker)
         if j>=0:stop=min(stop,j)
     body=body[:stop]
-    lines=[x.strip() for x in body.splitlines() if x.strip()]
-    result=[]
-    for line in lines:
-        if len(line)>240 or len(line)<4 or any(x in line for x in EXCLUDE):continue
-        prices=RE_PRICE.findall(line)
-        if not prices or not any(x in line for x in KEYWORDS):continue
-        price=int(prices[0].replace(',',''))
+    # Each price terminates one offer; product names may span multiple lines.
+    price_pair=re.compile(r'(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*(\d{1,3}(?:,\d{3})*|\d{1,5})\s*円\s*\(税込\)')
+    found=[]; cursor=0
+    for match in price_pair.finditer(body):
+        prefix=body[cursor:match.start()]
+        cursor=match.end()
+        parts=[x.strip() for x in prefix.splitlines() if x.strip()]
+        # Tokubai HTML often has a few navigation tokens between offers.
+        name=' '.join(parts[-5:]).strip()
+        if not name or len(name)>220:continue
+        if not any(k in name for k in KEYWORDS) or any(k in name for k in EXCLUDE):continue
+        price=int(match.group(2).replace(',',''))
         if price<=0 or price>20000:continue
-        item=line.split(' ')[0].strip('・　：')[:44]
-        if not any(x in item for x in KEYWORDS):
-            # tolerate source formatting but do not associate unrelated keywords
-            continue
-        qty=RE_QTY.search(line)
-        result.append({'store':store,'item':item,'price':price,'qty':qty.group(0) if qty else '単位要確認','source':url,'date':TODAY})
-    return result[:25]
+        qty=RE_QTY.search(name)
+        found.append({'store':store,'item':name[:95], 'price':price,
+            'qty':qty.group(0) if qty else '単位要確認','source':url,'date':TODAY})
+    return found[:25]
 
 def run(fetch=requests.get):
-    data={'updated_at':TODAY,'status':'ok','stores':[],'deals':[]}
+    data={'updated_at':TODAY,'status':'partial','stores':[],'deals':[]}
     for store,(name,url) in STORES.items():
         state={'id':store,'name':name,'url':url,'status':'unavailable','count':0}
         try:
