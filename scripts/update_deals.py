@@ -1,8 +1,8 @@
 """Daily store data updater for Karada Menu.
 
 Text-based, explicitly priced, dated items are treated as usable offers.
-Image-based flyers are made *viewable*, with their publication period checked
-separately. A flyer title/period is NEVER counted as a priced sale item.
+Image-based flyers are read with Japanese OCR as review candidates. Individual
+sale dates and OCR text require confirmation before use in meal suggestions.
 
 All sources are best effort and are subject to source-side permissions/markup.
 """
@@ -19,7 +19,12 @@ from zoneinfo import ZoneInfo
 import requests
 from bs4 import BeautifulSoup
 
-SCRIPT_VERSION = "v6.2-official-flyer-dates-20261018"
+if __package__:
+    from .flyer_ocr import read_flyer
+else:
+    from flyer_ocr import read_flyer
+
+SCRIPT_VERSION = "v7.0-japanese-flyer-ocr-review-20261018"
 ROOT = Path(__file__).resolve().parents[1]
 TODAY = datetime.now(ZoneInfo("Asia/Tokyo")).date()
 STORES = {
@@ -153,7 +158,8 @@ def flyer_from_html(html: str, store: str, url: str, provider: str,
     }
 
 
-def inspect_flyer(store: str, fetch=requests.get, today: date | None = None) -> dict:
+def inspect_flyer(store: str, fetch=requests.get, today: date | None = None,
+                  on_current=None) -> dict:
     current = today or TODAY
     sources = FLYER_SOURCES[store]
     first_fallback = {"store": store, "source": sources[0][0], "url": sources[0][1],
@@ -164,6 +170,8 @@ def inspect_flyer(store: str, fetch=requests.get, today: date | None = None) -> 
             response.raise_for_status()
             flyer = flyer_from_html(response.text, store, url, provider, kind, current)
             if flyer["status"] == "current":
+                if on_current:
+                    on_current(flyer, response.text)
                 return flyer
             # Track an explicit out-of-date issue or a site we can actually inspect.
             if first_fallback["status"] == "unverified":
@@ -177,7 +185,18 @@ def run(fetch=requests.get, today: date | None = None) -> dict:
     print("KARADA_SCRIPT_VERSION:", SCRIPT_VERSION)
     current = today or TODAY
     today_str = current.isoformat()
-    data = {"updated_at": today_str, "status": "partial", "stores": [], "deals": [], "flyers": []}
+    data = {"updated_at": today_str, "status": "partial", "stores": [], "deals": [],
+            "flyers": [], "ocr_candidates": [], "ocr_reports": []}
+
+    def process_images(flyer, html):
+        candidates, report = read_flyer(flyer, html, current, fetch, KEYWORDS, EXCLUDE)
+        data['ocr_candidates'].extend(candidates)
+        data['ocr_reports'].append(report)
+        flyer['item_extraction_status'] = report['status']
+        flyer['candidate_count'] = report['candidate_count']
+        print('OCR_STATUS:', flyer['store'], report['status'], report['candidate_count'], flush=True)
+        if report['status'] in ('failed', 'partial'):
+            print('::warning::Flyer OCR could not read all pages for ' + flyer['store'])
     for store, (name, url) in STORES.items():
         state = {"id": store, "name": name, "url": url,
                  "status": "unavailable", "count": 0}
@@ -201,10 +220,9 @@ def run(fetch=requests.get, today: date | None = None) -> dict:
             state["message"] = str(error)[:130]
         data["stores"].append(state)
         if store in FLYER_SOURCES:
-            flyer = inspect_flyer(store, fetch, current)
-            # Image publication dates are checked; image item/price OCR is not
-            # implemented. Keep this separate from the Tokubai fetch result.
-            flyer["item_extraction_status"] = "unsupported_image_extraction"
+            flyer = inspect_flyer(store, fetch, current, process_images)
+            flyer.setdefault("item_extraction_status", "not_attempted")
+            flyer.setdefault("candidate_count", 0)
             data["flyers"].append(flyer)
         time.sleep(0.15)
 
