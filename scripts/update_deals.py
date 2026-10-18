@@ -1,34 +1,3 @@
-"""Daily store data updater for Karada Menu.
-
-Text-based, explicitly priced, dated items are treated as usable offers.
-Image-based flyers are made *viewable*, with their publication period checked
-separately. A flyer title/period is NEVER counted as a priced sale item.
-
-All sources are best effort and are subject to source-side permissions/markup.
-"""
-from __future__ import annotations
-
-import json
-import re
-import time
-from datetime import date, datetime
-from pathlib import Path
-from urllib.parse import quote
-from zoneinfo import ZoneInfo
-
-import requests
-from bs4 import BeautifulSoup
-
-ROOT = Path(__file__).resolve().parents[1]
-TODAY = datetime.now(ZoneInfo("Asia/Tokyo")).date()
-STORES = {
-    "olympic": ("オリンピック 荒川一丁目店", "https://tokubai.co.jp/" + quote("オリンピック") + "/279440"),
-    "iida": ("コモディイイダ 町屋店", "https://tokubai.co.jp/" + quote("コモディイイダ") + "/7543"),
-    "tairaya": ("TAIRAYA 町屋店", "https://tokubai.co.jp/TAIRAYA/260526"),
-}
-# Links open the publishers' websites instead of copying their flyer images.
-# The listing may be useful even when the site prevents machine reading.
-FLYER_SOURCES = {
     "olympic": [
         ("Shufoo!", "https://www.shufoo.net/pntweb/shopDetail/891148/", "shufoo"),
         ("チラシガイド", "https://chirashi-guide.com/東京都/荒川区/222269/", "guide"),
@@ -94,3 +63,112 @@ def extract(text: str, store: str, url: str, today: date | None = None) -> list[
 def parsed_ranges(text: str) -> list[tuple[date, date]]:
     results = []
     for match in DATE_RANGE.finditer(text):
+        try:
+            start = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+            end = date(int(match.group(4)), int(match.group(5)), int(match.group(6)))
+        except ValueError:
+            continue
+        if start <= end and (end - start).days <= 90:
+            results.append((start, end))
+    return results
+
+
+def flyer_from_html(html: str, store: str, url: str, provider: str,
+                    kind: str, today: date) -> dict:
+    """Verify the flyer *date*, not flyer item prices."""
+    soup = BeautifulSoup(html, "html.parser")
+    for bad in soup(["script", "style", "noscript"]):
+        bad.decompose()
+    text = soup.get_text(" ", strip=True)
+    compact = re.sub(r"\s+", "", text)
+    expected = "オリンピック荒川一丁目店" if store == "olympic" else "コモディイイダ町屋店"
+    if expected not in compact:
+        return {"store": store, "source": provider, "url": url, "status": "store_unverified", "period": ""}
+
+    # Do not let archived flyer dates be interpreted as a new publication.
+    if kind == "guide":
+        text = text.split("最近掲載していたチラシ")[0]
+    elif kind == "shufoo":
+        # Shufoo! lists current issue dates in the main flyer block.
+        text = text.split("店舗詳細")[0]
+    ranges = parsed_ranges(text)
+    valid = [(start, end) for start, end in ranges if start <= today <= end]
+    if valid:
+        start, end = max(valid, key=lambda period: period[0])
+        status = "current"
+    elif ranges:
+        start, end = max(ranges, key=lambda period: period[1])
+        status = "expired" if end < today else "not_started"
+    else:
+        return {"store": store, "source": provider, "url": url, "status": "date_unverified", "period": ""}
+    return {
+        "store": store, "source": provider, "url": url,
+        "status": status, "period": f"{start.isoformat()}〜{end.isoformat()}",
+    }
+
+
+def inspect_flyer(store: str, fetch=requests.get, today: date | None = None) -> dict:
+    current = today or TODAY
+    sources = FLYER_SOURCES[store]
+    first_fallback = {"store": store, "source": sources[0][0], "url": sources[0][1],
+                      "status": "unverified", "period": ""}
+    for provider, url, kind in sources:
+        try:
+            response = fetch(url, timeout=18, headers=UA)
+            response.raise_for_status()
+            flyer = flyer_from_html(response.text, store, url, provider, kind, current)
+            if flyer["status"] == "current":
+                return flyer
+            # Track an explicit out-of-date issue or a site we can actually inspect.
+            if first_fallback["status"] == "unverified":
+                first_fallback = flyer
+        except requests.RequestException:
+            continue
+    return first_fallback
+
+
+def run(fetch=requests.get, today: date | None = None) -> dict:
+    print("KARADA_SCRIPT_VERSION:", SCRIPT_VERSION)
+    current = today or TODAY
+    today_str = current.isoformat()
+    data = {"updated_at": today_str, "status": "partial", "stores": [], "deals": [], "flyers": []}
+    for store, (name, url) in STORES.items():
+        state = {"id": store, "name": name, "url": url,
+                 "status": "unavailable", "count": 0}
+        try:
+            response = fetch(url, timeout=18, headers=UA)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            for tag in soup(["script", "style", "noscript"]):
+                tag.decompose()
+            text = soup.get_text("\n", strip=True)
+            # Date selector MUST identify today, or product prices are not trusted.
+            if not re.search(rf"{current.month}月\s*{current.day}日", text):
+                state["status"] = "date_unverified"
+            else:
+                found = extract(text, store, url, current)
+                state["status"] = "ok" if found else "no_extractable_offers"
+                state["count"] = len(found)
+                data["deals"].extend(found)
+        except requests.RequestException as error:
+            state["status"] = "fetch_failed"
+            state["message"] = str(error)[:130]
+        data["stores"].append(state)
+        if store in FLYER_SOURCES:
+            data["flyers"].append(inspect_flyer(store, fetch, current))
+        time.sleep(0.15)
+
+    output = ROOT / "data" / "latest.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    print("Updated", today_str, "offers", len(data["deals"]),
+          [(s["id"], s["status"], s["count"]) for s in data["stores"]])
+    print("FLYER_STATUS:", [(f["store"], f["source"], f["status"], f["period"])
+                             for f in data["flyers"]])
+    return data
+
+
+if __name__ == "__main__":
+    run()
+
+# KARADA_MENU_COMPLETE_FILE_END_v6_1
