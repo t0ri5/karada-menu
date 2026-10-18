@@ -1,7 +1,7 @@
 name: Daily supermarket flyer update and app deployment
 on:
   schedule:
-    # UTC 23:00 = JST 08:00; GitHub may delay scheduled jobs
+    # UTC 23:00 = JST 08:00 (GitHub scheduled runs may be delayed)
     - cron: '0 23 * * *'
   workflow_dispatch:
   push:
@@ -27,9 +27,102 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - name: Fetch today's published offers
         run: python scripts/update_deals.py
+      - name: Build site with uniquely versioned offer data
+        env:
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_ATTEMPT: ${{ github.run_attempt }}
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          python - <<'PYBUILD'
+          import json, os, shutil
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          build_id = os.environ['BUILD_RUN_ID'] + '-' + os.environ['BUILD_RUN_ATTEMPT']
+          src_data = Path('data/latest.json')
+          assert src_data.exists(), 'Scraper did not create data/latest.json'
+          payload = json.loads(src_data.read_text(encoding='utf-8'))
+          assert isinstance(payload.get('deals'), list), 'Expected deals list'
+          assert isinstance(payload.get('stores'), list), 'Expected stores list'
+          payload['build_id'] = build_id
+          payload['built_at_utc'] = datetime.now(timezone.utc).isoformat(timespec='seconds')
+          payload['source_revision'] = os.environ['BUILD_SHA'][:10]
+
+          site = Path('site')
+          (site / 'data' / 'runs').mkdir(parents=True, exist_ok=True)
+          for name in ('index.html', 'app.js', 'sw.js', 'manifest.webmanifest',
+                       'icon.svg', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png'):
+              assert Path(name).is_file(), 'Missing application file: ' + name
+              shutil.copyfile(name, site / name)
+
+          text = json.dumps(payload, ensure_ascii=False, indent=2) + '\n'
+          (site / 'data' / 'latest.json').write_text(text, encoding='utf-8')
+          run_relative = 'data/runs/' + build_id + '.json'
+          (site / run_relative).write_text(text, encoding='utf-8')
+          (site / 'data' / 'build.json').write_text(
+              json.dumps({'build_id': build_id, 'offer_count': len(payload['deals']),
+                          'updated_at': payload.get('updated_at')}, ensure_ascii=False) + '\n',
+              encoding='utf-8')
+
+          # Force each new app build to request the uniquely named data file.
+          app = site / 'app.js'
+          original = app.read_text(encoding='utf-8')
+          old = './data/latest.json?ts='
+          assert original.count(old) == 1, 'Cannot locate the old feed URL in app.js'
+          app.write_text(original.replace(old, './' + run_relative + '?ts='), encoding='utf-8')
+
+          # Avoid a stale app.js and stale offline cache after a new deployment.
+          index = site / 'index.html'
+          html = index.read_text(encoding='utf-8')
+          old_tag = '<script src="app.js" defer></script>'
+          assert old_tag in html, 'Cannot find app.js script tag'
+          index.write_text(html.replace(old_tag,
+                        '<script src="app.js?build=' + build_id + '" defer></script>'),
+                        encoding='utf-8')
+          sw = site / 'sw.js'
+          sw.write_text(sw.read_text(encoding='utf-8').replace('karada-menu-v3',
+                        'karada-menu-run-' + build_id), encoding='utf-8')
+
+          # Assert that the exact payload survives staging, before upload.
+          staged = json.loads((site / run_relative).read_text(encoding='utf-8'))
+          assert staged['build_id'] == build_id
+          assert len(staged['deals']) == len(payload['deals'])
+          print('DEPLOY_BUILD_ID:', build_id)
+          print('DEPLOY_OFFER_COUNT:', len(payload['deals']))
+          print('DEPLOY_STORE_STATUS:', [(s['id'], s['status'], s['count'])
+                                        for s in payload['stores']])
+          print('STAGED_OFFER_FILE:', run_relative)
+          PYBUILD
       - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - name: Upload exact staged site
+        uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: site
       - id: deployment
+        name: Deploy fresh site to GitHub Pages
         uses: actions/deploy-pages@v4
+      - name: Verify the deployed offer data
+        env:
+          DEPLOY_URL: ${{ steps.deployment.outputs.page_url }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python - <<'PYVERIFY'
+          import json, os, time
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+
+          build_id = os.environ['BUILD_RUN_ID'] + '-' + os.environ['BUILD_RUN_ATTEMPT']
+          url = (os.environ['DEPLOY_URL'].rstrip('/') +
+                 '/data/runs/' + build_id + '.json')
+          print('Verifying published version:', url, flush=True)
+          ok = False
+          # Allow a short propagation delay for GitHub Pages' CDN.
+          for attempt in range(15):
+              try:
+                  req = Request(url, headers={'Cache-Control': 'no-cache'})
+                  with urlopen(req, timeout=12) as response:
+                      payload = json.load(response)
+                  if payload.get('build_id') == build_id:
+                      print('PUBLISHED_BUILD_ID:', payload['build_id'])
+                      print('PUBLISHED_OFFER_COUNT:', len(payload.get('deals', [])))
