@@ -60,6 +60,15 @@ jobs:
           payload = json.loads(src_data.read_text(encoding='utf-8'))
           assert isinstance(payload.get('deals'), list), 'Expected deals list'
           assert isinstance(payload.get('stores'), list), 'Expected stores list'
+          # Daily dinner is generated from the reviewed meat-free catalog, not from ChatGPT conversations.
+          from zoneinfo import ZoneInfo
+          from datetime import date
+          today_jst = datetime.now(ZoneInfo('Asia/Tokyo')).date()
+          menu_catalog = json.loads(Path('data/daily_menus.json').read_text(encoding='utf-8'))
+          available_menus = menu_catalog['menus']
+          assert available_menus and all(isinstance(m.get('ingredients'), list) and m.get('title') and m.get('steps') for m in available_menus)
+          selected = available_menus[(today_jst - date(2026, 11, 2)).days % len(available_menus)]
+          payload['daily_menu'] = dict(selected, date=today_jst.isoformat(), source='curated_daily_rotation')
           payload['build_id'] = build_id
           payload['built_at_utc'] = datetime.now(timezone.utc).isoformat(timespec='seconds')
           payload['source_revision'] = os.environ['BUILD_SHA'][:10]
